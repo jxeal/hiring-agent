@@ -1,0 +1,30 @@
+[
+  {
+    "candidate_name": "Candidate 01",
+    "file_name": "candidate_01.pdf",
+    "eligible": true,
+    "rejection_reasons": [],
+    "total_score": 88,
+    "score_breakdown": {
+      "ai_project_depth": 4,
+      "python_backend": 27,
+      "cloud_fullstack": 13,
+      "github": 8,
+      "engineering_depth": 36
+    },
+    "matched_skills": [],
+    "project_summary": "",
+    "github_summary": "",
+    "github_enrichment_status": "not_available",
+    "strengths": [
+      "Strong Python backend foundation with FastAPI, async programming, and PostgreSQL.",
+      "Hands-on experience building complex multi-agent RAG systems using LangGraph and PGVector.",
+      "Solid engineering practices including background task queues (Celery) and caching (Redis)."
+    ],
+    "concerns": [
+      "Could benefit from deeper cloud deployment experience, such as setting up CI/CD pipelines or Kubernetes.",
+      "No active contributions to major open-source projects or libraries."
+    ],
+    "rank": 1
+  }
+]

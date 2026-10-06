@@ -226,10 +226,91 @@ class JSONResume(BaseModel):
 
 
 class CategoryScore(BaseModel):
-    score: float = Field(ge=0, description="Score achieved in this category")
-    max: int = Field(gt=0, description="Maximum possible score")
-    evidence: str = Field(min_length=1, description="Evidence supporting the score")
+    score: float = Field(default=0.0, description="Score achieved in this category")
+    max: int = Field(default=0, description="Maximum possible score")
+    evidence: str = Field(default="", description="Evidence supporting the score")
 
+    @model_validator(mode="before")
+    @classmethod
+    def parse_score(cls, val):
+        if isinstance(val, (int, float)):
+            return {"score": float(val), "max": 0, "evidence": f"Score awarded: {val}"}
+        return val
+
+
+class ScoreBreakdown(BaseModel):
+    ai_project_depth: CategoryScore = Field(default_factory=CategoryScore)
+    python_backend: CategoryScore = Field(default_factory=CategoryScore)
+    cloud_fullstack: CategoryScore = Field(default_factory=CategoryScore)
+    github: CategoryScore = Field(default_factory=CategoryScore)
+    engineering_depth: CategoryScore = Field(default_factory=CategoryScore)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_defaults(cls, values):
+        if not isinstance(values, dict):
+            return values
+        max_map = {
+            "ai_project_depth": 40,
+            "python_backend": 30,
+            "cloud_fullstack": 15,
+            "github": 10,
+            "engineering_depth": 5,
+        }
+        res = {}
+        for k, max_val in max_map.items():
+            item = values.get(k, {})
+            if isinstance(item, (int, float)):
+                res[k] = {"score": float(item), "max": max_val, "evidence": f"Score: {item}/{max_val}"}
+            elif isinstance(item, dict):
+                item_copy = dict(item)
+                if not item_copy.get("max"):
+                    item_copy["max"] = max_val
+                res[k] = item_copy
+            else:
+                res[k] = {"score": 0.0, "max": max_val, "evidence": "Not provided"}
+        return res
+
+
+class EvaluationData(BaseModel):
+    candidate_name: Optional[str] = "Candidate"
+    eligible: bool = Field(
+        default=False,
+        description="Whether the candidate passes hard eligibility (Python + AI)",
+    )
+    rejection_reasons: List[str] = Field(
+        default_factory=list, description="Reasons for rejection if ineligible"
+    )
+    total_score: float = Field(
+        default=0.0,
+        ge=0,
+        le=100,
+        description="Sum of 5 score components (0-100), 0 if rejected",
+    )
+    score_breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
+    matched_skills: List[str] = Field(default_factory=list)
+    project_summary: Optional[str] = ""
+    github_summary: Optional[str] = ""
+    github_enrichment_status: Optional[str] = "not_available"
+    strengths: List[str] = Field(default_factory=list)
+    concerns: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, values):
+        if isinstance(values, dict):
+            if "candidate" in values and "candidate_name" not in values:
+                values["candidate_name"] = values["candidate"]
+            if values.get("eligible") and (not values.get("total_score") or values.get("total_score") == 0):
+                bd = values.get("score_breakdown", {})
+                if isinstance(bd, dict):
+                    calc_total = sum(
+                        (v if isinstance(v, (int, float)) else v.get("score", 0))
+                        for v in bd.values() if isinstance(v, (int, float, dict))
+                    )
+                    if calc_total > 0:
+                        values["total_score"] = float(calc_total)
+        return values
 
 class Deductions(BaseModel):
     total: float = Field(

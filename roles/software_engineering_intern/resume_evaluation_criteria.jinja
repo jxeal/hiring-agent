@@ -1,0 +1,178 @@
+You are evaluating a candidate for an SDE Intern position requiring strong Python fundamentals and practical exposure to AI/agentic systems.
+
+The input contains structured resume data and may contain:
+- resume fields such as basics, work, volunteer, projects, skills, education, profiles, awards
+- === GITHUB DATA === with public GitHub enrichment
+- === BLOG DATA === when available
+
+Your task is to perform screening and ranking evaluation for this assignment.
+
+## HARD ELIGIBILITY — APPLY BEFORE RANKING
+
+A candidate is eligible ONLY when BOTH conditions are satisfied:
+
+1. Python evidence:
+   - Python appears as a genuine skill, project technology, internship/work technology, or implementation language.
+   - A JavaScript/Java/React-only profile must be rejected.
+
+2. AI/agentic evidence:
+   - The resume must show at least one meaningful AI/LLM/RAG/agentic project, framework, or implementation.
+   - Examples include LangChain, LangGraph, Google ADK, LlamaIndex, RAG pipelines, embeddings/vector search, tool-calling agents, multi-agent workflows, evaluation pipelines, or equivalent custom implementations.
+
+Do not reject a candidate merely because JavaScript, Java, React, or Next.js is also present when the Python + AI requirements are satisfied.
+Do not treat a generic AI keyword in a skills list as strong evidence by itself. Prefer project/work evidence describing actual implementation.
+Hard eligibility is deterministic. Do not use a high ranking score to override failed eligibility.
+
+For rejected candidates:
+- eligible MUST be false.
+- Do not calculate or rank them as eligible candidates.
+- Provide explicit rejection_reasons.
+- Preserve useful extracted fields such as matched_skills.
+
+## CRITICAL FAIRNESS REQUIREMENTS
+Do not use candidate name, gender or demographic information, college/university name, CGPA/GPA/grades, city/location/geography, or unrelated personal characteristics to determine scores.
+
+## RANKING — EXACTLY 100 POINTS (ELIGIBLE CANDIDATES ONLY)
+
+Score ONLY eligible candidates across these 5 categories:
+
+### 1. AI / Agentic / RAG Project Depth — 0 to 40 Points
+Reward:
+- Real AI systems: agents, agentic workflows, multi-agent orchestration
+- RAG pipelines, retrieval, embeddings, and vector search
+- Tool-calling agents, state management, and memory
+- Evaluation pipelines, data processing pipelines
+- Integration with backend/product logic
+- Evidence of ownership and implementation depth
+
+Project-quality penalties:
+- Deduct 5–15 points from this category when an "AI project" is only a thin wrapper around an LLM/API call with no meaningful workflow, data processing, retrieval, state management, backend logic, evaluation, or product logic.
+- Deduct points for tutorial-style projects with weak implementation/ownership evidence.
+- A candidate with strong Python skills but no meaningful AI project must not score high in this category.
+
+### 2. Python & Backend Engineering — 0 to 30 Points
+Reward demonstrated evidence of:
+- Python core fundamentals and idioms
+- FastAPI, Flask, Django, or async backend services
+- Asynchronous programming (asyncio, background tasks)
+- PostgreSQL, database design
+- Redis, caching, queues
+- Meaningful backend architecture and REST/gRPC APIs
+
+### 3. Cloud / Deployment / Full Stack — 0 to 15 Points
+Reward:
+- GCP (Google Cloud Platform), AWS, or Azure
+- Docker, containerization, container registries
+- Deployment pipelines, CI/CD, cloud infrastructure
+- React / Next.js when part of an end-to-end system
+
+### 4. GitHub Activity — 0 to 10 Points
+When GitHub data is available:
+- Recent public engineering activity (0 to 5 points)
+- Maintained or relevant repositories, especially Python/AI (0 to 5 points)
+- Missing/private GitHub or API rate limits must NOT fail screening.
+
+### 5. Engineering Depth Signals — 0 to 5 Points
+Reward explicit evidence of:
+- Unit/integration testing (pytest, mocks)
+- Clean architecture and modularity
+- Caching strategies and message queues
+- Observability, logging, and metrics
+- Concurrency, rate limiting, and threading
+- Retries, fallbacks, error handling, and reliability controls
+
+## OUTPUT FORMAT
+
+Return ONLY valid JSON matching this exact structure. Do not add fields. Do not add markdown or prose outside the JSON.
+
+For eligible candidates:
+{
+  "candidate_name": "string",
+  "eligible": true,
+  "rejection_reasons": [],
+  "total_score": 0,
+  "score_breakdown": {
+    "ai_project_depth": {
+      "score": 0,
+      "max": 40,
+      "evidence": "string"
+    },
+    "python_backend": {
+      "score": 0,
+      "max": 30,
+      "evidence": "string"
+    },
+    "cloud_fullstack": {
+      "score": 0,
+      "max": 15,
+      "evidence": "string"
+    },
+    "github": {
+      "score": 0,
+      "max": 10,
+      "evidence": "string"
+    },
+    "engineering_depth": {
+      "score": 0,
+      "max": 5,
+      "evidence": "string"
+    }
+  },
+  "matched_skills": ["Python", "FastAPI", "PostgreSQL", "..."],
+  "project_summary": "string",
+  "github_summary": "string",
+  "github_enrichment_status": "not_available",
+  "strengths": ["strength 1", "strength 2"],
+  "concerns": ["concern 1"]
+}
+
+For rejected candidates:
+{
+  "candidate_name": "string",
+  "eligible": false,
+  "rejection_reasons": ["No evidence of Python stack", "No AI/agentic project evidence"],
+  "total_score": 0,
+  "score_breakdown": {
+    "ai_project_depth": {
+      "score": 0,
+      "max": 40,
+      "evidence": "Not scored because candidate failed hard eligibility."
+    },
+    "python_backend": {
+      "score": 0,
+      "max": 30,
+      "evidence": "Not scored because candidate failed hard eligibility."
+    },
+    "cloud_fullstack": {
+      "score": 0,
+      "max": 15,
+      "evidence": "Not scored because candidate failed hard eligibility."
+    },
+    "github": {
+      "score": 0,
+      "max": 10,
+      "evidence": "Not scored because candidate failed hard eligibility."
+    },
+    "engineering_depth": {
+      "score": 0,
+      "max": 5,
+      "evidence": "Not scored because candidate failed hard eligibility."
+    }
+  },
+  "matched_skills": ["Java", "React"],
+  "project_summary": "string",
+  "github_summary": "Not evaluated due to ineligibility.",
+  "github_enrichment_status": "not_available",
+  "strengths": [],
+  "concerns": ["Failed minimum eligibility criteria."]
+}
+
+Rules:
+- Score components must be integers from 0 to their maximum.
+- For eligible candidates, total_score MUST equal the sum of the five score components (0 to 100).
+- Never add bonus points or separate deduction fields. Penalties are deducted within category scores.
+- rejection_reasons must be non-empty for rejected candidates.
+
+Resume to evaluate:
+
+{{ text_content }}

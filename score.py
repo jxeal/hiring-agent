@@ -25,7 +25,7 @@ import argparse
 
 from pdf import PDFHandler
 from github import fetch_and_display_github_info
-from models import JSONResume, build_evaluation_model
+from models import JSONResume, build_evaluation_model, EvaluationData
 from typing import List, Optional, Dict
 from evaluator import ResumeEvaluator
 from roles import Role, load_role, list_available_roles, scaffold_role
@@ -48,97 +48,116 @@ logging.basicConfig(
 
 
 def print_evaluation_results(
-    evaluation, role: Role, candidate_name: str = "Candidate"
+    evaluation, role: str = None, candidate_name: str = "Candidate", *args, **kwargs
 ):
     """Print evaluation results in a readable format."""
     print("\n" + "=" * 80)
     print(f"📊 RESUME EVALUATION RESULTS FOR: {candidate_name}")
+    if role:
+        print(f"💼 ROLE: {role}")
     print("=" * 80)
 
     if not evaluation:
         print("❌ No evaluation data available")
         return
 
-    # Calculate overall score
-    total_score = 0
-    max_score = 0
+    # Check if eligible field exists
+    eligible = getattr(evaluation, "eligible", None)
+    if eligible is None and isinstance(evaluation, dict):
+        eligible = evaluation.get("eligible")
 
-    if hasattr(evaluation, "scores") and evaluation.scores:
-        for category_name, category_data in evaluation.scores.model_dump().items():
-            category_score = min(category_data["score"], category_data["max"])
-            total_score += category_score
-            max_score += category_data["max"]
+    if eligible is False:
+        print("\n❌ ELIGIBILITY STATUS: REJECTED (Failed Hard Eligibility Filter)")
+        print("-" * 60)
+        print("Reasons for rejection:")
+        reasons = getattr(evaluation, "rejection_reasons", None) or (evaluation.get("rejection_reasons", []) if isinstance(evaluation, dict) else [])
+        for reason in reasons:
+            print(f"  • {reason}")
+        skills = getattr(evaluation, "matched_skills", None) or (evaluation.get("matched_skills", []) if isinstance(evaluation, dict) else [])
+        if skills:
+            print(f"\nMatched skills found: {', '.join(skills)}")
+        print("\n🎯 OVERALL SCORE: 0.0/100 (Ineligible candidates are not ranked)")
+        print("\n" + "=" * 80)
+        return
 
-            # Log warning if score was capped
-            if category_score < category_data["score"]:
-                print(
-                    f"⚠️  Warning: {category_name} score capped from {category_data['score']} to {category_score} (max: {category_data['max']})"
+    # Calculate or retrieve total score
+    total_score = getattr(evaluation, "total_score", None)
+    if total_score is None and isinstance(evaluation, dict):
+        total_score = evaluation.get("total_score")
+    
+    # 1. Check if score_breakdown exists
+    score_breakdown = getattr(evaluation, "score_breakdown", None) or (evaluation.get("score_breakdown") if isinstance(evaluation, dict) else None)
+    if score_breakdown:
+        bd = score_breakdown.model_dump() if hasattr(score_breakdown, "model_dump") else score_breakdown
+        if isinstance(bd, dict):
+            if total_score is None:
+                total_score = sum(
+                    (v if isinstance(v, (int, float)) else v.get("score", 0))
+                    for v in bd.values() if isinstance(v, (int, float, dict))
                 )
 
-    # Add bonus points
-    if hasattr(evaluation, "bonus_points") and evaluation.bonus_points:
-        total_score += evaluation.bonus_points.total
+            print(f"\n🎯 OVERALL SCORE: {total_score:.1f}/100")
+            print("\n📈 DETAILED SCORES (100 Points Max):")
+            print("-" * 60)
+            
+            categories = [
+                ("ai_project_depth", "🤖 AI / Agentic / RAG Project Depth", 40),
+                ("python_backend", "🐍 Python & Backend Engineering", 30),
+                ("cloud_fullstack", "☁️ Cloud / Deployment / Full Stack", 15),
+                ("github", "🐙 GitHub Activity", 10),
+                ("engineering_depth", "⚙️ Engineering Depth Signals", 5),
+            ]
+            
+            for key, label, default_max in categories:
+                item = bd.get(key, {})
+                if isinstance(item, (int, float)):
+                    score_val = item
+                    max_val = default_max
+                    evidence = ""
+                else:
+                    score_val = item.get("score", 0)
+                    max_val = item.get("max", default_max)
+                    evidence = item.get("evidence", "")
+                
+                print(f"{label}: {score_val:.1f}/{max_val}")
+                if evidence:
+                    print(f"   Evidence: {evidence}")
+                print()
 
-    # Subtract deductions
-    if hasattr(evaluation, "deductions") and evaluation.deductions:
-        total_score -= evaluation.deductions.total
+    # 2. Check if legacy scores dict exists
+    elif hasattr(evaluation, "scores") or (isinstance(evaluation, dict) and "scores" in evaluation):
+        scores = getattr(evaluation, "scores", None) or evaluation.get("scores")
+        items = scores.model_dump() if hasattr(scores, "model_dump") else scores
+        if isinstance(items, dict):
+            if total_score is None:
+                total_score = sum(v["score"] for v in items.values() if isinstance(v, dict) and "score" in v)
 
-    # Ensure total score doesn't exceed maximum possible score
-    max_possible_score = max_score + role.bonus_max
-    if total_score > max_possible_score:
-        total_score = max_possible_score
-        print(f"⚠️  Warning: Total score capped at maximum possible value")
+            print(f"\n🎯 OVERALL SCORE: {total_score:.1f}/100")
+            print("\n📈 DETAILED SCORES (100 Points Max):")
+            print("-" * 60)
+            for cat_name, cat_data in items.items():
+                if isinstance(cat_data, dict):
+                    label = cat_name.replace("_", " ").title()
+                    print(f"• {label}: {cat_data.get('score', 0)}/{cat_data.get('max', 0)}")
+                    if cat_data.get("evidence"):
+                        print(f"  Evidence: {cat_data.get('evidence', '')}")
+                    print()
 
-    # Overall Score
-    print(f"\n🎯 OVERALL SCORE: {total_score:.1f}/{max_score}")
-
-    # Detailed Scores
-    print("\n📈 DETAILED SCORES:")
-    print("-" * 60)
-
-    if hasattr(evaluation, "scores") and evaluation.scores:
-        for category in role.categories:
-            cat_score = getattr(evaluation.scores, category.key, None)
-            if not cat_score:
-                continue
-            capped_score = min(cat_score.score, category.max)
-            print(f"{category.icon} {category.label}: {capped_score}/{cat_score.max}")
-            print(f"   Evidence: {cat_score.evidence}")
-            print()
-
-    # Bonus Points
-    if hasattr(evaluation, "bonus_points") and evaluation.bonus_points:
-        print(f"\n⭐ BONUS POINTS: {evaluation.bonus_points.total}")
+    # Strengths & areas for improvement
+    strengths = getattr(evaluation, "strengths", None) or getattr(evaluation, "key_strengths", None) or (evaluation.get("strengths") or evaluation.get("key_strengths") if isinstance(evaluation, dict) else [])
+    if strengths:
+        print("✅ KEY STRENGTHS:")
         print("-" * 30)
-        print(f"   {evaluation.bonus_points.breakdown}")
+        for i, s in enumerate(strengths, 1):
+            print(f"  {i}. {s}")
+        print()
 
-    # Deductions
-    if (
-        hasattr(evaluation, "deductions")
-        and evaluation.deductions
-        and evaluation.deductions.total > 0
-    ):
-        print(f"\n⚠️  DEDUCTIONS: -{evaluation.deductions.total}")
+    concerns = getattr(evaluation, "concerns", None) or getattr(evaluation, "areas_for_improvement", None) or (evaluation.get("concerns") or evaluation.get("areas_for_improvement") if isinstance(evaluation, dict) else [])
+    if concerns:
+        print("🔧 AREAS FOR IMPROVEMENT / CONCERNS:")
         print("-" * 30)
-        if evaluation.deductions.reasons:
-            print(f"   {evaluation.deductions.reasons}")
-
-    # Key Strengths
-    if hasattr(evaluation, "key_strengths") and evaluation.key_strengths:
-        print(f"\n✅ KEY STRENGTHS:")
-        print("-" * 30)
-        for i, strength in enumerate(evaluation.key_strengths, 1):
-            print(f"  {i}. {strength}")
-
-    # Areas for Improvement
-    if (
-        hasattr(evaluation, "areas_for_improvement")
-        and evaluation.areas_for_improvement
-    ):
-        print(f"\n🔧 AREAS FOR IMPROVEMENT:")
-        print("-" * 30)
-        for i, area in enumerate(evaluation.areas_for_improvement, 1):
-            print(f"  {i}. {area}")
+        for i, c in enumerate(concerns, 1):
+            print(f"  {i}. {c}")
 
     print("\n" + "=" * 80)
 
@@ -205,6 +224,11 @@ def find_profile(profiles, network):
 
 
 def main(pdf_path, role: Role):
+    if isinstance(role, str):
+        if "load_role" in globals():
+            role = load_role(role)
+        elif "get_role" in globals():
+            role = get_role(role)
     evaluation_model = build_evaluation_model(role)
 
     # Create cache filename based on PDF path
