@@ -1,370 +1,308 @@
-# Hiring Agent
+# AI Resume Screening & Ranking System
 
-<p align="center"><strong>Resume-to-Score pipeline</strong> that extracts structured data from PDFs, enriches with GitHub signals, and outputs a fair, explainable evaluation.</p>
+> **Role Target:** SDE Intern + AI background  
+> **Evaluation Model:** Deterministic Hard Filter + 100-Point Explainable AI Ranking Model  
+> **Interface:** Batch CLI (`main.py`) & Single Evaluator (`score.py`)
 
-<p align="center">
-  <a href="https://www.python.org/downloads/release/python-3110/">
-    <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue.svg">
-  </a>
-  <a href="https://github.com/interviewstreet/hiring-agent/blob/master/LICENSE">
-    <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-yellow.svg">
-  </a>
-  <a href="https://github.com/psf/black">
-    <img alt="Code style: Black" src="https://img.shields.io/badge/code%20style-Black-000000.svg">
-  </a>
-</p>
+An automated, explainable resume evaluation pipeline that ingests a directory of candidate resumes, applies deterministic hard eligibility filters (Python + AI/agentic systems), enriches eligible candidates using public GitHub signals, scores candidates across a 100-point rubric with project-quality penalties, and produces a ranked shortlist in structured JSON.
 
 ---
 
-## Contents
-
-- [Context and intent](#context-and-intent)
-- [Coverage](#coverage)
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Installation and Setup](#installation-and-setup)
-  - [Prerequisites](#prerequisites)
-  - [Quick setup with pip](#quick-setup-with-pip)
-  - [Ollama models](#ollama-models)
-- [Configuration](#configuration)
-- [How it works](#how-it-works)
-- [CLI usage](#cli-usage)
-- [Directory layout](#directory-layout)
-- [Provider details](#provider-details)
-- [Contributing](#contributing)
-- [License](#license)
-
----
-
-## Context and intent
-
-This project got a lot of attention recently, and some of the discussion surfaced misconceptions worth addressing directly.
-
-**What this is not:**
-- Not an ATS (Applicant Tracking System)
-- Not used to screen HackerRank's open roles
-- Not a product available to HackerRank customers
-
-**What it actually is:**
-
-Every year HackerRank receives 50,000–60,000 intern applications. No human can read that many resumes well. This tool was built to *rank* them — helping decide which resumes to read first. Resumes scoring below the cutoff are filtered out, but the cutoff is intentionally set very low so only candidates at the very bottom of the distribution are removed. The vast majority pass through to human review, where the real decisions are made.
-
-Since this was built, HackerRank has also shipped [AI Interviewer (Chakra)](https://www.hackerrank.com/products/ai-interviewer/) to automate the first round of interviews — so candidates are no longer assessed on their resume alone.
-
-**On the default model:**
-
-The repo ships with `gemma4:latest` as the default because it runs locally on most laptops without any cloud API key. Actual intern resumes at HackerRank are evaluated using a top-tier Gemini model. The repo ships with a demo config, not the production one.
+## 📑 Table of Contents
+- [How It Works](#how-it-works)
+- [Input & Output Specification](#input--output-specification)
+  - [Input: Resume Directory](#input-resume-directory)
+  - [Output: Ranked JSON](#output-ranked-json)
+  - [Terminal Batch Summary](#terminal-batch-summary)
+- [Scoring Rubric & Rules](#scoring-rubric--rules)
+  - [Hard Eligibility Filter](#1-hard-eligibility-filter-mandatory)
+  - [100-Point Candidate Ranking](#2-100-point-candidate-ranking-eligible-only)
+- [Installation & Setup](#installation--setup)
+- [How to Run](#how-to-run)
+  - [Batch Screening & Ranking](#1-batch-screening--ranking-all-resumes)
+  - [Single Resume Evaluation](#2-single-resume-evaluation)
+- [Design Decisions](#design-decisions)
+- [If I Had More Time](#if-i-had-more-time)
+- [Credits & Acknowledgements](#credits--acknowledgements)
 
 ---
 
-## Coverage
+## ⚙️ How It Works
 
-Articles and discussions that have shaped how we think about improving this project:
+```
+                        [ ./resume/*.pdf ]
+                                │
+                                ▼
+                   ┌───────────────────────────┐
+                   │  1. PyMuPDF Text Parser   │
+                   └─────────────┬─────────────┘
+                                 │
+                                 ▼
+                   ┌───────────────────────────┐
+                   │ 2. Section Extraction LLM │
+                   │  (Basics, Work, Projects) │
+                   └─────────────┬─────────────┘
+                                 │
+                                 ▼
+                   ┌───────────────────────────┐
+                   │ 3. Hard Eligibility Check │
+                   │  (Python + AI/Agentic)    │
+                   └─────────────┬─────────────┘
+                                 │
+                 ┌───────────────┴───────────────┐
+                 ▼                               ▼
+          [ ❌ INELIGIBLE ]               [ ✅ ELIGIBLE ]
+          - eligible: false                      │
+          - total_score: 0                       ▼
+          - rejection_reasons: [...]  ┌───────────────────────────┐
+                                      │ 4. GitHub REST Enrichment │
+                                      │    (commits, repos, PRs)  │
+                                      └──────────┬────────────────┘
+                                                 │
+                                                 ▼
+                                      ┌───────────────────────────┐
+                                      │ 5. LLM Semantic Scoring   │
+                                      │    (100-point rubric with │
+                                      │     thin-wrapper penalty) │
+                                      └──────────┬────────────────┘
+                                                 │
+                                                 ▼
+                                      ┌───────────────────────────┐
+                                      │ 6. Ranking & Shortlist    │
+                                      │    (Saved to results.json)│
+                                      └───────────────────────────┘
+```
 
-| Article | Key takeaway |
-|---|---|
-| [HackerRank open sourced its ATS. My resume scored 90/100. Oh wait 74/100. No — 88/100. Actually 83/100.](https://danunparsed.com/p/hackerrank-open-source-ats) — *Dan Kinsky* | Deep statistical analysis of score variance across 100 runs of the same resume. Isolates which categories are stable (technical skills) vs. noisy (project quality judgments). Points to LLM non-determinism as the root cause. |
-| [The Score Depends on the Roll of the Dice](https://pinggy.io/blog/hackerrank_open_source_ats_inconsistent_scoring/) — *Pinggy Blog* | Reproduces the variance findings and surfaces a security issue: invisible text embedded in PDFs can inflate scores significantly. |
-| [The Hiring Rubric Inside](https://byteiota.com/hackerrank-ats-open-source-the-hiring-rubric-inside/) — *ByteIota* | Breaks down the scoring weights and argues that a GitHub-centric rubric disadvantages engineers whose work is in private enterprise repos. Also notes the signal degradation risk as candidates optimize for the now-public rubric. |
-| [Analyzing resume scoring consistency](https://dev.to/mgobea/hackerrank-open-sourced-its-ats-analyzing-resume-scoring-consistency-1j5d) — *Mariano Gobea Alcoba, DEV Community* | Proposes concrete fixes: standardized data formats, versioned evaluation models, ensemble scoring, and explainability layers to reduce variance and make the system more robust. |
-| [AI-Powered Pipeline for Explainable Resume Scoring](https://aitoolly.com/ai-news/article/2026-06-26-interviewstreet-unveils-hiring-agent-an-ai-powered-pipeline-for-explainable-resume-scoring-and-githu) — *AIToolly* | Covers the launch and highlights the transparency argument — making scoring logic public allows scrutiny that proprietary ATS systems never face. |
-| [Hacker News discussion](https://news.ycombinator.com/item?id=48713832) | 200+ comment thread covering LLM determinism, GDPR Article 22 implications, and the broader ethics of automated resume filtering. |
-
-**Video coverage**
-
-- [HackerRank Open-Sourced Their ATS?](https://www.youtube.com/shorts/0OP2bhYZQfc) — YouTube Short
-- [HackerRank Open-Sourced ATS Tool for selecting Resume](https://www.youtube.com/shorts/UnHGC1Ywhys) — YouTube Short
-- [HackerRank Custom ATS Released! Get Your Resume Score & Beat ATS Filters](https://www.youtube.com/watch?v=tQSve-xx4_8) — full walkthrough video
-
-**Community tools built on this repo**
-
-- [Resume Reality Check](https://resume-reality-check-seven.vercel.app/) — hosted tool that lets candidates score their own resume against the same rubric
-
----
-
-## Overview
-
-Hiring Agent parses a resume PDF to Markdown, extracts sectioned JSON using a local or hosted LLM, augments the data with GitHub profile and repository signals, then produces an objective evaluation with category scores, evidence, bonus points, and deductions. You can run fully local with Ollama or use Google Gemini.
-
----
-
-## Architecture
-
-<table>
-<tr>
-<td>
-
-**Flow**
-
-1. `pymupdf_rag.py` converts PDF pages to Markdown-like text.
-2. `pdf.py` calls the LLM per section using Jinja templates under `prompts/templates`.
-3. `github.py` fetches profile and repos, classifies projects, and asks the LLM to select the top 7.
-4. `evaluator.py` runs a strict-scored evaluation with fairness constraints.
-5. `score.py` orchestrates everything end to end and writes CSV when development mode is on.
-
-</td>
-<td>
-
-**Key modules**
-
-- `models.py`
-  Pydantic schemas and LLM provider interfaces.
-
-- `llm_utils.py`
-  Provider initialization and response cleanup.
-
-- `transform.py`
-  Normalization from loose LLM JSON to JSON Resume style.
-
-- `prompts/`
-  All Jinja templates for extraction and scoring.
-
-</td>
-</tr>
-</table>
+1. **Document Ingestion:** Ingests all candidate PDFs from the input directory. Malformed or unreadable resumes are caught gracefully without terminating the batch.
+2. **Section Extraction:** Parses resume structure into standard fields (skills, projects, work experience, GitHub profiles).
+3. **Deterministic Hard Filter:** Rejects candidates who lack genuine Python evidence or meaningful AI/agentic exposure before ranking.
+4. **GitHub Enrichment:** If a candidate provides a GitHub link, fetches recent commit velocity, maintained repositories, and AI/Python repositories.
+5. **Semantic Evaluation:** Evaluates project depth, backend fundamentals, cloud usage, and engineering practices using LLMs (Gemini / Ollama) constrained by structured output schemas.
+6. **Incremental Saving & Ranking:** Saves each candidate's record as it completes and sorts the final list by score descending.
 
 ---
 
-## Installation and Setup
+## 📦 Input & Output Specification
+
+### Input: Resume Directory
+Place PDF resumes into an input folder (e.g. `./resume/` or `./resumes/`):
+```text
+project/
+├── resume/
+│   ├── candidate_01.pdf
+│   ├── candidate_02.pdf
+│   ├── candidate_03.pdf
+│   └── ...
+```
+
+### Output: Ranked JSON (`./output/results.json`)
+The batch processor outputs a structured array of evaluated candidates:
+
+```json
+[
+  {
+    "rank": 1,
+    "candidate_name": "Kartikay Sinha",
+    "file_name": "candidate_01.pdf",
+    "eligible": true,
+    "total_score": 86,
+    "score_breakdown": {
+      "ai_project_depth": 36,
+      "python_backend": 26,
+      "cloud_fullstack": 12,
+      "github": 8,
+      "engineering_depth": 4
+    },
+    "matched_skills": [
+      "Python",
+      "FastAPI",
+      "LangGraph",
+      "LlamaIndex",
+      "PostgreSQL",
+      "Redis",
+      "Docker",
+      "GCP"
+    ],
+    "project_summary": "Multi-agent RAG system using LangGraph and LlamaIndex for financial document analysis with tool calling and ChromaDB.",
+    "github_summary": "Active GitHub profile with recent contributions and maintained Python repositories.",
+    "github_enrichment_status": "success",
+    "strengths": [
+      "Strong practical experience with LangGraph and multi-agent orchestration.",
+      "Solid Python backend foundation using FastAPI, Redis, and PostgreSQL.",
+      "Demonstrated engineering depth with caching, task queues, and unit testing."
+    ],
+    "concerns": [
+      "Could gain more experience with cloud-native observability tools (Prometheus/Grafana)."
+    ]
+  },
+  {
+    "rank": null,
+    "candidate_name": "John Doe",
+    "file_name": "candidate_02.pdf",
+    "eligible": false,
+    "rejection_reasons": [
+      "No evidence of Python stack (JavaScript/React only profile)",
+      "No AI/agentic project evidence"
+    ],
+    "total_score": 0,
+    "score_breakdown": {
+      "ai_project_depth": 0,
+      "python_backend": 0,
+      "cloud_fullstack": 0,
+      "github": 0,
+      "engineering_depth": 0
+    },
+    "matched_skills": ["React", "Node.js", "Express"],
+    "project_summary": "Standard web applications without Python or AI implementation.",
+    "github_summary": "Not evaluated due to ineligibility.",
+    "github_enrichment_status": "not_available",
+    "strengths": [],
+    "concerns": ["Candidate does not meet minimum eligibility criteria."]
+  }
+]
+```
+
+### Terminal Batch Summary
+Upon completion, `main.py` prints the required summary metrics directly in the console:
+
+```text
+================================================================================
+📊 BATCH SCREENING & RANKING SUMMARY
+================================================================================
+📁 Total Resumes Found:        10
+✅ Successfully Evaluated:     10
+🎯 Eligible Candidates:       7
+❌ Ineligible / Rejected:      3
+⚠️  Failed / Unreadable:        0
+================================================================================
+
+🏆 TOP RANKED CANDIDATES SHORTLIST:
+Rank  Score   Candidate Name              Highlights
+--------------------------------------------------------------------------------
+#1    86      Kartikay Sinha              Python, FastAPI, LangGraph, PostgreSQL
+#2    81      Priya Sharma                FastAPI, LlamaIndex, RAG, Docker
+#3    78      Aman Verma                  LangChain, Vector Search, Redis, GCP
+================================================================================
+```
+
+---
+
+## 🎯 Scoring Rubric & Rules
+
+### 1. Hard Eligibility Filter (Mandatory)
+Candidates must satisfy **both** rules to be eligible for ranking:
+1. **Python Evidence:** Python must appear as a genuine skill, project implementation language, or work technology. *A JavaScript/Java/React-only candidate is rejected.*
+2. **AI / Agentic Evidence:** Must demonstrate at least one meaningful AI/LLM/RAG/agentic project (LangChain, LangGraph, LlamaIndex, RAG retrieval pipelines, embeddings/vector search, tool-calling agents, or multi-agent workflows).
+
+*Note: Ineligible candidates receive `eligible: false`, `total_score: 0`, and explicit `rejection_reasons`.*
+
+### 2. 100-Point Candidate Ranking (Eligible Only)
+
+| Category | Weight | What is Evaluated & Rewarded |
+| :--- | :---: | :--- |
+| **AI / Agentic / RAG Project Depth** | **40** | Multi-agent workflows, state management, tool calling, RAG pipelines, retrieval & embeddings, evaluation pipelines, real user impact. *(5–15 point penalty for thin API wrappers).* |
+| **Python & Backend Engineering** | **30** | Python idioms, FastAPI, async programming (`asyncio`), PostgreSQL schema design, Redis caching. Project evidence weighted over skill lists. |
+| **Cloud / Deployment / Full Stack** | **15** | GCP/AWS, Docker containerization, cloud deployment, and full-stack React/Next.js when part of an end-to-end system. |
+| **GitHub Activity** | **10** | Recent engineering activity (0–5 pts) + maintained/relevant repositories (0–5 pts). *Missing GitHub does not disqualify.* |
+| **Engineering Depth Signals** | **5** | Unit testing (`pytest`), architectural modularity, caching, message queues, observability, retries, and concurrency. |
+
+---
+
+## 🚀 Installation & Setup
 
 ### Prerequisites
+- Python 3.10+ (tested on Python 3.11 and 3.12)
+- Virtual environment recommended
 
-- **Python 3.11+**
-
-  The repository pins `.python-version` to 3.11.13.
-
-- **One LLM backend** (either of them)
-
-  - **Ollama** for local models
-    Install from the [official site](https://ollama.com/), then run `ollama serve`.
-  - **Google Gemini** if you have an API key, get it from [here](https://aistudio.google.com/api-keys).
-
-### Quick setup with pip
-
+### 1. Clone & Install Dependencies
 ```bash
-$ git clone https://github.com/interviewstreet/hiring-agent
-$ cd hiring-agent
+# Clone the repository
+git clone <your-repo-url>
+cd hiring-agent-test
 
-$ python -m venv .venv
-# Linux or macOS
-$ source .venv/bin/activate
-# Windows
-# .venv\Scripts\activate
+# Create and activate virtual environment
+python -m venv venv
+# On Windows:
+venv\Scripts\activate
+# On Linux/macOS:
+source venv/bin/activate
 
-$ pip install -r requirements.txt
+# Install required packages
+pip install -r requirements.txt
 ```
 
-### Ollama Models
-
-Pull the model you want to use. For example:
-
+### 2. Configure Environment (`.env`)
+Create a `.env` file from the example:
 ```bash
-$ ollama pull gemma4:latest
+cp .env.example .env
+```
+Add your credentials to `.env`:
+```env
+# LLM Provider Configuration
+LLM_PROVIDER=gemini
+DEFAULT_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=AIzaSyYourActualKeyHere
+
+# Optional: GitHub token to avoid public API rate limits (5,000 requests/hr vs 60/hr)
+GITHUB_TOKEN=ghp_YourGitHubTokenHere
 ```
 
-If you want different results, you can pull other models such as:
+---
 
+## 💻 How to Run
+
+### 1. Batch Screening & Ranking (All Resumes)
+To process an entire directory of resumes and generate the ranked shortlist:
 ```bash
-# For higher system configuration
-$ ollama pull gemma3:12b
-
-# For lower system configuration
-$ ollama pull gemma3:1b
+python main.py --input ./resume --output ./output/results.json --role software_engineering_intern
 ```
 
----
+**CLI Flags:**
+- `--input` / `-i`: Path to the folder containing PDF resumes (default: `./resume`).
+- `--output` / `-o`: Destination path for the output JSON (default: `./output/results.json`).
+- `--role` / `-r`: Job role to evaluate against (default: `software_engineering_intern`).
 
-## Configuration
-
-Copy the template and set your environment variables.
-
+### 2. Single Resume Evaluation
+To inspect a single candidate in detail:
 ```bash
-$ cp .env.example .env
-```
-
-**Environment variables**
-
-| Variable         | Values                                      | Description                                                            |
-| ---------------- | ------------------------------------------- | ---------------------------------------------------------------------- |
-| `DEFAULT_MODEL`  | for example `gemma4:latest`, `gemini-2.5-pro`, or `gpt-6-luna` | Model to use; must exist in `providers.json` — the provider is inferred from which provider lists it. Defaults to `default_model` in `providers.json`. |
-| `GEMINI_API_KEY` | string                                      | Required when using a Gemini model.                                   |
-| `OPENAI_API_KEY` | string                                      | Required when using an OpenAI model.                                  |
-| `GITHUB_TOKEN`   | optional                                    | Inherits from your shell environment, improves GitHub API rate limits. |
-
-Provider mapping lives in `providers.json` — each provider declares its `base_url`, an optional API-key env var, and per-model parameters; `config.py` loads it and resolves the provider for a model. `config.py` also has a flag:
-
-```python
-# config.py
-DEVELOPMENT_MODE = True  # enables caching and CSV export
-```
-
-You can leave it on during iteration. See the next section for details.
-
----
-
-## How it works
-
-<details>
-<summary><b>1) PDF extraction</b></summary>
-
-- `pymupdf_rag.py` and `pdf.py` read the PDF using PyMuPDF and convert pages to Markdown-like text.
-- The `to_markdown` routine handles headings, links, tables, and basic formatting.
-
-</details>
-
-<details>
-<summary><b>2) Section parsing with templates</b></summary>
-
-- `prompts/templates/*.jinja` define strict instructions for each section
-  Basics, Work, Education, Skills, Projects, Awards.
-- `pdf.PDFHandler` calls the LLM per section and assembles a `JSONResume` object (see `models.py`).
-
-</details>
-
-<details>
-<summary><b>3) GitHub enrichment</b></summary>
-
-- `github.py` extracts a username from the resume profiles, fetches profile and repos, and classifies each project.
-- It asks the LLM to select exactly 7 unique projects with a minimum author commit threshold, favoring meaningful contributions.
-
-</details>
-
-<details>
-<summary><b>4) Evaluation</b></summary>
-
-- `evaluator.py` scores the resume against the **role** selected on the command line.
-- Each role lives in `roles/<role_name>/` and defines its own scoring categories and weights in `role.json`, plus its own `criteria.jinja` and `system_message.jinja` prompts (encoding fairness and scoring rules).
-- The shipped `software_engineering_intern` role scores `open_source`, `self_projects`, `production`, `technical_skills`, and `ai_fluency`, plus bonus and deductions, with evidence for each. Other roles can define entirely different categories.
-- The intern role defines `bonus_rules` in `role.json`. The LLM returns evidence and allowed point values for each named bonus; Python calculates the total and itemized explanation. For HackerRank Orchestrate, the model supplies the best rank from awards and its points; Python validates +4 for ranks 1–100, +3 for 101–200, +1 for 201–500, and 0 otherwise, once per candidate. All bonuses share the 20-point cap. Roles without `bonus_rules` keep the original total-and-breakdown response format. Evidence interpretation still depends on the LLM.
-
-</details>
-
-<details>
-<summary><b>5) Output and CSV export</b></summary>
-
-- `score.py` prints a readable summary to stdout.
-- When `DEVELOPMENT_MODE=True` it creates or appends a per-role `resume_evaluations_<role>.csv` with key fields (columns follow the role's categories), and caches intermediate JSON under `cache/`.
-
-</details>
-
----
-
-## CLI usage
-
-### End to end scoring
-
-Provide a path to a resume PDF and the role to score against. `--role` is the
-name of a directory under `roles/` and is **required**.
-
-```bash
-$ python score.py ./resume/sample.pdf --role software_engineering_intern
-```
-
-What happens:
-
-1. If development mode is on, the PDF extraction result is cached to `cache/resumecache_<basename>.json`.
-2. If a GitHub profile is found in the resume, repositories are fetched and cached to `cache/githubcache_<basename>.json`.
-3. The evaluator scores the resume against the selected role, prints a report and, in development mode, appends a CSV row to `resume_evaluations_<role>.csv`.
-
-### Roles
-
-A role bundles its rubric in `roles/<role_name>/`:
-
-```text
-roles/software_engineering_intern/
-├── role.json           # categories, weights (max), bonus_max, score bounds, position_title
-├── criteria.jinja      # evaluation criteria prompt (receives {{ text_content }})
-└── system_message.jinja
-```
-
-`role.json` drives the scoring schema, the printed report, the CSV columns, and
-the score caps — so each role can score against its own categories and weights.
-
-To add a role, scaffold one with basic template files and then edit them:
-
-```bash
-$ python score.py --init-role backend_engineer
-# edit roles/backend_engineer/{role.json,criteria.jinja,system_message.jinja}
-$ python score.py ./resume/sample.pdf --role backend_engineer
-```
-
-`--init-role` creates the role directory with placeholder categories and prompts
-(it only scaffolds; it does not score a resume). You can also copy an existing
-role directory instead.
-
----
-
-## Directory layout
-
-```text
-.
-├── .env.example
-├── .python-version
-├── config.py
-├── evaluator.py
-├── github.py
-├── llm_utils.py
-├── models.py
-├── pdf.py
-├── prompt.py
-├── prompts/
-│   ├── template_manager.py
-│   └── templates/
-│       ├── awards.jinja
-│       ├── basics.jinja
-│       ├── education.jinja
-│       ├── github_project_selection.jinja
-│       ├── projects.jinja
-│       ├── skills.jinja
-│       ├── system_message.jinja
-│       └── work.jinja
-├── providers.json
-├── pymupdf_rag.py
-├── requirements.txt
-├── roles.py
-├── roles/
-│   └── software_engineering_intern/
-│       ├── role.json
-│       ├── criteria.jinja
-│       └── system_message.jinja
-├── score.py
-└── transform.py
+python score.py ./resume/candidate_01.pdf --role software_engineering_intern
 ```
 
 ---
 
-## Provider details
+## 🧠 Design Decisions
 
-### Ollama
+1. **Deterministic Eligibility Before Scoring:**  
+   To prevent well-written resumes from overriding core job requirements, hard filters are applied prior to scoring. Non-Python or non-AI profiles are rejected deterministically with zero score and documented rejection reasons.
 
-- Set `DEFAULT_MODEL` to any pulled model listed in `providers.json`, for example `gemma4:latest`
-- Requests go through `models.OpenAICompatibleProvider` against Ollama's OpenAI-compatible endpoint (`http://localhost:11434/v1`)
+2. **Penalty for Thin API Wrappers:**  
+   Many candidates claim AI experience from basic single-line LLM API calls. The rubric explicitly detects and deducts 5–15 points for "thin wrappers" that lack retrieval, state management, tool calling, data processing, or backend logic.
 
-### Gemini
+3. **Incremental Saving for Batch Resilience:**  
+   `main.py` writes to the output file after every single candidate. If network issues, rate limits, or process interruptions occur during a 50-resume run, completed progress is preserved.
 
-- Set `DEFAULT_MODEL` to a Gemini model listed in `providers.json`, for example `gemini-3.8-flash`
-- Provide `GEMINI_API_KEY`
-- The same `models.OpenAICompatibleProvider` wrapper is used, pointed at Gemini's OpenAI-compatible endpoint
+4. **Fault-Tolerant File Handling:**  
+   Corrupted PDFs or missing fields do not crash the batch. Errors are isolated, recorded as `failed/unreadable` in the output record, and the batch continues seamlessly.
 
-### OpenAI
-
-- Set `DEFAULT_MODEL` to an OpenAI model listed in `providers.json`, for example `gpt-6-luna`
-- Provide `OPENAI_API_KEY`
-- Requests use OpenAI Chat Completions with JSON Schema structured output
+5. **Non-Disqualifying GitHub Signals:**  
+   GitHub is treated as an additive signal (0–10 points). Missing profiles, private repositories, or rate-limited API calls never cause candidate ineligibility.
 
 ---
 
-## Contributing
+## 🔮 If I Had More Time
 
-Please read the [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed guidelines on filing issues, proposing changes, and submitting pull requests. Key principles include:
-
-- Keep prompts declarative and provider-agnostic.
-- Validate changes with a couple of real resumes under different providers.
-- Add or adjust unit-free smoke tests that call each stage with minimal inputs.
+1. **Bounded Async Concurrency:**  
+   Introduce an asynchronous worker queue (using `asyncio` and `aiohttp`) with a concurrency limit (e.g., 3–5 concurrent workers) to speed up 50+ resume batches from minutes to seconds.
+2. **Multi-Format Ingestion (DOCX / TXT):**  
+   Add native python-docx support to extract and score non-PDF resume formats seamlessly.
+3. **RAG & Agent Evaluation Integration:**  
+   Integrate automated evaluation tools like Ragas or TruLens to evaluate candidate project repositories directly against code quality benchmarks.
+4. **Vector Deduplication:**  
+   Add lightweight semantic hashing to detect duplicate candidate submissions or reused resume templates across large batches.
 
 ---
 
+## 👏 Credits & Acknowledgements
 
-## License
-
-[MIT](https://github.com/interviewstreet/hiring-agent/blob/master/LICENSE) © HackerRank
+- Core architecture and evaluation foundation cloned and adapted from HackerRank. Credits to [**@shlokashah**](https://github.com/shlokashah), software engineer at **HackerRank**.
+- Extended with the SDE Intern + AI screening rubric, hard filter validation, project-quality penalty detection, and batch processing pipeline.
